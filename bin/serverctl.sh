@@ -152,7 +152,6 @@ case "${cmd}" in
     env::load "$ROOT_DIR/env.server"
 
     log::step "Repo (git)"
-    repo::clone_or_update "$ROOT_DIR" "$REPO_URL_IN" "$BRANCH_IN"
 
     log::step "Nginx ($TYPE)"
     nginx::deploy "$TYPE" "$ROOT_DIR/nginx-templates"
