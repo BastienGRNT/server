@@ -24,7 +24,7 @@ nginx::deploy(){
   local TYPE="$1" TPL_DIR="$2"
   [[ -n "$TYPE" && -d "$TPL_DIR" ]] || { log::err "nginx::deploy usage"; exit 1; }
 
-  local CERT_DIR; CERT_DIR="$(nginx::write_certs)"
+  local CERT_DIR="$(nginx::write_certs)"
 
   local TPL
   case "$TYPE" in
