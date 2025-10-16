@@ -4,8 +4,16 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
+# 1) Bootstrap
+if [[ ! -f "$ROOT_DIR/lib/_bootstrap.sh" ]]; then
+  echo "Fichier introuvable: $ROOT_DIR/lib/_bootstrap.sh" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
 source "$ROOT_DIR/lib/_bootstrap.sh"
-import "log.sh"
+
+# 2) Imports
+import "log.sh" || { echo "Import log.sh échoué (ROOT_DIR=$ROOT_DIR)" >&2; exit 1; }
 import "util.sh"
 import "run.sh"
 import "pkg.sh"
@@ -13,6 +21,12 @@ import "env.sh"
 import "nginx.sh"
 import "repo.sh"
 import "ui.sh"
+
+# 3) Sanity-check (évite l'erreur ligne 19 si log.sh n'a pas été chargé)
+if ! declare -F log::init >/dev/null 2>&1; then
+  echo "log::init indisponible (import log.sh a échoué)" >&2
+  exit 1
+fi
 
 : "${LOG_LEVEL:=info}"
 : "${LOG_FILE:=}"
