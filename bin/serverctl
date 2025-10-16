@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+
+source "$ROOT_DIR/lib/_bootstrap.sh"
+import "log.sh"
+import "util.sh"
+import "run.sh"
+import "pkg.sh"
+import "env.sh"
+import "nginx.sh"
+import "repo.sh"
+import "ui.sh"
+
+: "${LOG_LEVEL:=info}"
+: "${LOG_FILE:=}"
+log::init "$LOG_LEVEL" "$LOG_FILE"
+
+usage(){
+cat <<USAGE
+Usage: serverctl <commande>
+
+Commandes :
+  init_server    Initialiser serveur (env -> packages -> nginx)
+  init_repo      Initialiser le dépôt (env git -> clone/update)
+
+USAGE
+}
+
+init_server(){
+  ui::section_begin 1 1 "Initialisation serveur"
+  ui::step_start "Base env"
+  env::init_base || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Config Nginx dans env"
+  env::init_nginx || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Certificats dans env"
+  env::init_certificate || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Installation Nginx"
+  pkg::install_nginx || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Installation Node LTS"
+  pkg::install_node_lts || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Installation Git"
+  pkg::install_git || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Écriture certificats"
+  nginx::certificate || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Génération conf Nginx"
+  nginx::conf || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Reload Nginx"
+  nginx::reload || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::section_end
+}
+
+init_repo(){
+  ui::section_begin 1 1 "Initialisation dépôt"
+  ui::step_start "Config Git dans env"
+  env::init_git || { ui::step_err; exit 1; }
+  ui::step_ok
+
+  ui::step_start "Clonage / mise à jour repo"
+  repo::clone_or_update "$ROOT_DIR" || { ui::step_err; exit 1; }
+  ui::step_ok
+  ui::section_end
+}
+
+cmd="${1:-}"; shift || true
+case "${cmd}" in
+  init_server) init_server ;;
+  init_repo)   init_repo ;;
+  ""|-h|--help) usage ;;
+  *) echo "Commande inconnue: $cmd"; usage; exit 1 ;;
+esac

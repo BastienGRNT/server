@@ -13,27 +13,18 @@ server {
   ssl_certificate_key     ${CERT_DIR}/certificate.key;
   ssl_trusted_certificate ${CERT_DIR}/bundle.pem;
 
-  add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
-  add_header X-Content-Type-Options "nosniff" always;
-  add_header X-Frame-Options "SAMEORIGIN" always;
-  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-  gzip on; gzip_comp_level 5; gzip_min_length 1024;
-  gzip_types text/plain text/css application/javascript application/json application/xml image/svg+xml;
-  server_tokens off;
-
-  root /var/www/front;
+  root ${BUILD_DIR};
   index index.html;
   location / { try_files $uri $uri/ /index.html; }
 
   location /api/ {
-    proxy_pass http://127.0.0.1:${PORT_API};
-    proxy_http_version 1.1;
+    proxy_pass http://127.0.0.1:${PORT_BACK};
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
     proxy_set_header Upgrade           $http_upgrade;
     proxy_set_header Connection        "upgrade";
-    proxy_read_timeout 60s;
   }
 }
