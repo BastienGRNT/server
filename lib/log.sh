@@ -10,7 +10,9 @@ log::init() {
   LOG_BACKUPS="${4:-${LOG_BACKUPS:-5}}"
   declare -gA __LOG_NUM=( [debug]=10 [info]=20 [warn]=30 [error]=40 [silent]=99 )
   __LOG_CUR="${__LOG_NUM[$LOG_LEVEL]:-20}"
-  [[ -n "$LOG_FILE" ]] && mkdir -p "$(dirname "$LOG_FILE")"
+  if [[ -n "$LOG_FILE" ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+  fi
 }
 
 log::rotate() {
