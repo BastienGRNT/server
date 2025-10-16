@@ -140,34 +140,153 @@ env::init_nginx() {
 }
 
 env::init_certificate() {
-  local file="${1:-$ENV_FILE_DEFAULT}"; env::init_file "$file"; [[ -f "$file" ]] && env::load "$file" || true
+  local file="${1:-$ENV_FILE_DEFAULT}"
+  env::init_file "$file"
+  [[ -f "$file" ]] && env::load "$file" || true
+
   while true; do
     local CERT_DIR_ CERTKEY_ CERTPEM_ BUNDLEPEM_
+    # CERT_DIR simple
     env::_prompt_value CERT_DIR_  "CERT_DIR" "${CERT_DIR:-/opt/certificates}"
-    env::_prompt_value CERTKEY_   "CERTKEY (base64 ou chemin)" "${CERTKEY:-}"
-    env::_prompt_value CERTPEM_   "CERTPEM (base64 ou chemin)" "${CERTPEM:-}"
-    env::_prompt_value BUNDLEPEM_ "BUNDLEPEM (base64 ou chemin, optionnel)" "${BUNDLEPEM:-}"
+    # Les trois suivants acceptent: paste | /chemin | base64
+    env::input_cert_value CERTKEY_   "CERTKEY"   "${CERTKEY:-}"   0
+    env::input_cert_value CERTPEM_   "CERTPEM"   "${CERTPEM:-}"   0
+    env::input_cert_value BUNDLEPEM_ "BUNDLEPEM" "${BUNDLEPEM:-}" 1  # optionnel
+
+    # Récap (on tronque l'affichage pour éviter de spammer l'écran)
+    local ckey_preview ccert_preview cbundle_preview
+    ckey_preview="$( [[ -z "$CERTKEY_" ]] && echo "<vide>" || ( [[ -f "$CERTKEY_" ]] && echo "file:$CERTKEY_" || echo "base64:$(printf '%s' "$CERTKEY_" | cut -c1-12)…" ) )"
+    ccert_preview="$( [[ -z "$CERTPEM_" ]] && echo "<vide>" || ( [[ -f "$CERTPEM_" ]] && echo "file:$CERTPEM_" || echo "base64:$(printf '%s' "$CERTPEM_" | cut -c1-12)…" ) )"
+    cbundle_preview="$( [[ -z "$BUNDLEPEM_" ]] && echo "<vide>" || ( [[ -f "$BUNDLEPEM_" ]] && echo "file:$BUNDLEPEM_" || echo "base64:$(printf '%s' "$BUNDLEPEM_" | cut -c1-12)…" ) )"
+
     env::_recap "Récapitulatif - Certificats" \
-      "CERT_DIR=${CERT_DIR_}" "CERTKEY=${CERTKEY_}" "CERTPEM=${CERTPEM_}" "BUNDLEPEM=${BUNDLEPEM_}"
+      "CERT_DIR=${CERT_DIR_}" \
+      "CERTKEY=${ckey_preview}" \
+      "CERTPEM=${ccert_preview}" \
+      "BUNDLEPEM=${cbundle_preview}"
+
     if env::_confirm_changes "Confirmer ces valeurs"; then
       env::_apply_kv "$file" "CERT_DIR"  "$CERT_DIR_"
       env::_apply_kv "$file" "CERTKEY"   "$CERTKEY_"
       env::_apply_kv "$file" "CERTPEM"   "$CERTPEM_"
       env::_apply_kv "$file" "BUNDLEPEM" "$BUNDLEPEM_"
-      log::info "Certificats enregistrés dans $file"; return 0
-    else case $? in 1) echo "Recommencer...";; 2) echo "Annulé."; return 2;; esac fi
+      log::info "Certificats enregistrés dans $file"
+      return 0
+    else
+      case $? in
+        1) echo "Recommencer...";;
+        2) echo "Annulé."; return 2;;
+      esac
+    fi
   done
 }
 
-env::edit_base()        { env::init_base "$@"; }
-env::edit_git()         { env::init_git "$@"; }
-env::edit_nginx()       { env::init_nginx "$@"; }
-env::edit_certificate() { env::init_certificate "$@"; }
 
-env::snapshot() {
-  local file="${1:-$ENV_FILE_DEFAULT}" root="${2:-.}"
-  local t; t="$(date +%Y%m%d-%H%M%S)"
-  local dir="$root/.env.audit"; util::ensure_dir "$dir" 750
-  cp -f "$file" "$dir/${t}.env"
-  log::info "Snapshot: $dir/${t}.env"
+
+
+
+# --- Helpers certificat ---
+
+# Encode en base64 sur une seule ligne (portable)
+env::b64_oneline() {
+  base64 | tr -d '\n\r\t '
+}
+
+# Teste si une chaîne *semble* décodable en base64
+env::looks_base64() {
+  local s="$1"
+  # On retire les blancs, puis on tente un decode en /dev/null
+  printf '%s' "$s" | tr -d '\n\r\t ' | base64 -d >/dev/null 2>&1
+}
+
+# Capture un PEM multi-ligne, encode en base64 (1 ligne), demande confirmation
+# Retourne la chaine base64 dans la variable passée en 1er argument (nameref)
+env::ask_pem_b64() {
+  local __outvar="$1" __desc="$2" __optional="${3:-0}"
+  local tmp content_b64 bytes_digest
+  while true; do
+    echo "$__desc"
+    echo "(Colle le contenu complet PEM, puis tape 'EOF' seul sur une ligne pour terminer)"
+    tmp="$(mktemp)"
+    # Lire jusqu'à EOF
+    while IFS= read -r line; do
+      [[ "$line" == "EOF" ]] && break
+      printf '%s\n' "$line" >> "$tmp"
+    done
+    if [[ ! -s "$tmp" && "$__optional" == "1" ]]; then
+      echo "→ Contenu vide accepté."
+      content_b64=""
+    else
+      content_b64="$(env::b64_oneline < "$tmp")"
+      bytes_digest=$(wc -c < "$tmp" | tr -d ' ')
+      echo "Taille: ${bytes_digest} octets"
+      echo "Aperçu: $(head -n1 "$tmp") … $(tail -n1 "$tmp")"
+    fi
+    rm -f "$tmp"
+
+    if env::_confirm_changes "Confirmer ce contenu"; then
+      printf -v "$__outvar" '%s' "$content_b64"
+      break
+    else
+      echo "Ok, on recommence…"
+    fi
+  done
+}
+
+# Lit une valeur pour un cert donné selon 3 modes:
+# - 'paste'  : coller un PEM multi-ligne → renvoie base64
+# - '/path'  : chemin de fichier existant → renvoie le chemin
+# - sinon    : traite la saisie comme base64 (valide avant)
+# Params:
+#   $1 = nom de variable de sortie
+#   $2 = label (ex: "CERTKEY")
+#   $3 = valeur par défaut (facultatif)
+#   $4 = optional? 1/0 (ex: BUNDLEPEM est optionnel)
+env::input_cert_value() {
+  local __outvar="$1" __label="$2" __default="${3:-}" __optional="${4:-0}"
+  local in
+  local hint="(saisis 'paste' pour coller un PEM, ou un /chemin de fichier, ou du base64)"
+  if [[ -n "$__default" ]]; then
+    # On n'affiche pas la valeur par défaut (sécurité), juste qu'il y en a une
+    read -r -p "${__label} ${hint} [défaut présent, Entrée pour conserver]: " in
+    in="${in:-__KEEP_DEFAULT__}"
+  else
+    read -r -p "${__label} ${hint}: " in
+  fi
+
+  # Gestion vide/defaut lorsque optionnel
+  if [[ -z "$in" && "$__optional" == "1" && -z "$__default" ]]; then
+    printf -v "$__outvar" '%s' ""
+    return 0
+  fi
+
+  # Conserver la valeur précédente
+  if [[ "$in" == "__KEEP_DEFAULT__" ]]; then
+    printf -v "$__outvar" '%s' "$__default"
+    return 0
+  fi
+
+  # Mode paste
+  if [[ "$in" == "paste" ]]; then
+    local b64=""; env::ask_pem_b64 b64 "$__label : coller le PEM puis EOF" "$__optional"
+    printf -v "$__outvar" '%s' "$b64"
+    return 0
+  fi
+
+  # Chemin de fichier ?
+  if [[ "$in" == /* && -f "$in" ]]; then
+    printf -v "$__outvar" '%s' "$in"
+    return 0
+  fi
+
+  # Sinon: base64
+  if env::looks_base64 "$in"; then
+    # On nettoie les blancs
+    in="$(printf '%s' "$in" | tr -d '\n\r\t ')"
+    printf -v "$__outvar" '%s' "$in"
+    return 0
+  fi
+
+  echo "Entrée invalide pour $__label. Recommencer."
+  env::input_cert_value "$__outvar" "$__label" "$__default" "$__optional"
 }

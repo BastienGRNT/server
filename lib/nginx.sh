@@ -53,26 +53,87 @@ nginx::conf() {
 nginx::certificate() {
   local file_env="${1:-env.server}"
   env::load "$file_env" || return 1
+
   local dir="${CERT_DIR:-/opt/certificates}"
   util::ensure_dir "$dir" 700
 
-  _write_cert() {
+  # -- helpers internes --
+
+  # Écrit un contenu "texte" tel quel (PEM brut), en mode atomique + comparaison
+  _write_text() { # _write_text "<content>" "<dest>" <mode>
+    local content="$1" dest="$2" mode="$3"
+    local tmp; tmp="$(mktemp)"
+    # On garantit une fin de ligne
+    printf '%s\n' "$content" > "$tmp"
+    if [[ ! -f "$dest" ]] || ! cmp -s "$tmp" "$dest"; then
+      install -D -m "$mode" "$tmp" "$dest"
+    fi
+    rm -f "$tmp"
+  }
+
+  # Écrit depuis un fichier source si différent
+  _write_from_file() { # _write_from_file "<src_file>" "<dest>" <mode>
     local src="$1" dest="$2" mode="$3"
-    if [[ -f "$src" ]]; then
-      cmp -s "$src" "$dest" || install -D -m "$mode" "$src" "$dest"
-    else
-      local tmp; tmp="$(mktemp)"
-      if ! printf '%s' "$src" | base64 -d > "$tmp" 2>/dev/null; then rm -f "$tmp"; log::error "Décodage base64 échoué pour $dest"; return 1; fi
-      if [[ ! -f "$dest" ]] || ! cmp -s "$tmp" "$dest"; then install -D -m "$mode" "$tmp" "$dest"; fi
-      rm -f "$tmp"
+    if [[ ! -f "$dest" ]] || ! cmp -s "$src" "$dest"; then
+      install -D -m "$mode" "$src" "$dest"
     fi
   }
 
-  [[ -n "${CERTKEY:-}" ]] || { log::error "CERTKEY manquant"; return 1; }
-  [[ -n "${CERTPEM:-}" ]] || { log::error "CERTPEM manquant"; return 1; }
-  _write_cert "$CERTKEY"  "$dir/certificate.key" 600 || return 1
-  _write_cert "$CERTPEM"  "$dir/certificate.pem" 644 || return 1
-  if [[ -n "${BUNDLEPEM:-}" ]]; then _write_cert "$BUNDLEPEM" "$dir/bundle.pem" 644 || return 1
-  else [[ -f "$dir/bundle.pem" ]] || install -D -m 644 "$dir/certificate.pem" "$dir/bundle.pem"; fi
-  log::info "Certificats en place dans $dir"
+  # Décodage base64 portable (on retire les blancs/retours avant decode)
+  _write_from_b64() { # _write_from_b64 "<b64_data>" "<dest>" <mode>
+    local b64="$1" dest="$2" mode="$3"
+    local tmp; tmp="$(mktemp)"
+    if ! printf '%s' "$b64" | tr -d '\n\r\t ' | base64 -d > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      log::error "Décodage base64 échoué pour $dest"
+      return 1
+    fi
+    if [[ ! -f "$dest" ]] || ! cmp -s "$tmp" "$dest"; then
+      install -D -m "$mode" "$tmp" "$dest"
+    fi
+    rm -f "$tmp"
+  }
+
+  # Décide automatiquement comment écrire: chemin / PEM / base64
+  _write_auto() { # _write_auto "<value>" "<dest>" <mode>
+    local val="$1" dest="$2" mode="$3"
+
+    if [[ -z "$val" ]]; then
+      log::error "Valeur vide pour $dest"
+      return 1
+    fi
+
+    if [[ -f "$val" ]]; then
+      _write_from_file "$val" "$dest" "$mode" || return 1
+      return 0
+    fi
+
+    # PEM brut collé (commence souvent par -----BEGIN …)
+    if [[ "$val" == *"-----BEGIN"* ]]; then
+      _write_text "$val" "$dest" "$mode" || return 1
+      return 0
+    fi
+
+    # Sinon: on tente base64
+    _write_from_b64 "$val" "$dest" "$mode" || return 1
+  }
+
+  # -- contrôles d'entrée minimaux --
+  [[ -n "${CERTKEY:-}"  ]] || { log::error "CERTKEY manquant dans $file_env";  return 1; }
+  [[ -n "${CERTPEM:-}"  ]] || { log::error "CERTPEM manquant dans $file_env";  return 1; }
+  # BUNDLEPEM est optionnel
+
+  # -- écritures --
+  _write_auto  "${CERTKEY}"  "${dir}/certificate.key"  600 || return 1
+  _write_auto  "${CERTPEM}"  "${dir}/certificate.pem"  644 || return 1
+
+  if [[ -n "${BUNDLEPEM:-}" ]]; then
+    _write_auto "${BUNDLEPEM}" "${dir}/bundle.pem" 644 || return 1
+  else
+    # fallback si le bundle n'est pas fourni
+    [[ -f "${dir}/bundle.pem" ]] || install -D -m 644 "${dir}/certificate.pem" "${dir}/bundle.pem"
+  fi
+
+  log::info "Certificats en place dans ${dir}"
 }
+
