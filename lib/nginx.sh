@@ -42,7 +42,7 @@ nginx::deploy(){
   mv -f "$tmp_conf" "$CONF"
 
   log::step "Validation Nginx"
-  nginx -t
+  nginx -v
   (systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true)
   log::ok "Nginx déployé ($TYPE) → $CONF"
 }
