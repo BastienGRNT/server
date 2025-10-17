@@ -7,7 +7,7 @@ import (
 )
 
 func Info(message string) {
-	fmt.Println("\\033[34m" + message + "\\033[0m")
+	fmt.Printf("\033[34m%s\033[0m\n", message)
 }
 
 func Clear() {
